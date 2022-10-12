@@ -40,7 +40,7 @@ pub fn draw<B: Backend>(f: &mut Frame<B>, app: &mut App) {
 
     let selected_style = Style::default().add_modifier(Modifier::REVERSED);
     let normal_style = Style::default().bg(Color::Blue);
-    let header_cells = ["Header1", "Header2", "Header3"]
+    let header_cells = ["PID", "Process Name", "Memory Usage [kB]"]
         .iter()
         .map(|h| Cell::from(*h).style(Style::default().fg(Color::Red)));
     let header = Row::new(header_cells)
@@ -59,13 +59,13 @@ pub fn draw<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     });
     let t = Table::new(rows)
         .header(header)
-        .block(Block::default().borders(Borders::ALL).title("Table"))
+        .block(Block::default().borders(Borders::ALL).title("Process List"))
         .highlight_style(selected_style)
         .highlight_symbol(">> ")
         .widths(&[
-            Constraint::Percentage(50),
-            Constraint::Length(30),
-            Constraint::Min(10),
+            Constraint::Length(8),
+            Constraint::Percentage(80),
+            Constraint::Percentage(20),
         ]);
     f.render_stateful_widget(t, rects[0], &mut app.table_state);
 

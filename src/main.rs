@@ -1,5 +1,6 @@
 mod app;
 mod ui;
+mod win;
 
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
