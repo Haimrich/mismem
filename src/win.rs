@@ -1,4 +1,4 @@
-use std::{mem::{self, size_of}, ops::BitAnd};
+use std::{mem::{self, size_of}, ops::BitAnd, convert::TryInto};
 
 use windows::Win32::{
     Foundation::{
@@ -34,6 +34,8 @@ use windows::Win32::{
         GetWindowTextW
     },
 };
+
+use crate::mem::{Memory,Datatype};
 
 
 pub struct WinProc {
@@ -97,8 +99,8 @@ pub fn check_process(pid : u32) -> bool {
 }
 
 
-pub fn scan_process(pid : u32, value: i64, target_bytes: &[u8], progress: &mut f64) ->  Vec<[i64;3]> {
-    let mut results = Vec::<[i64;3]>::new();
+pub fn scan_process(pid : u32, target_bytes: &[u8], target_type: &Datatype, progress: &mut f64) -> Memory {
+    let mut results = Memory::new();
     let num_bytes = target_bytes.len();
 
     unsafe {
@@ -128,11 +130,11 @@ pub fn scan_process(pid : u32, value: i64, target_bytes: &[u8], progress: &mut f
 
                 buffer.windows(num_bytes).enumerate().for_each(|(offset, window)| {
                     if window == target_bytes {
-                        results.push([page.BaseAddress as i64 + offset as i64, value, value]);
+                        results.push(page.BaseAddress as usize + offset, target_type, target_bytes);
                     }
                 });
 
-                *progress = i as f64 / pages.len() as f64;
+                *progress = (i+1) as f64 / pages.len() as f64;
             }
 
 
@@ -142,38 +144,57 @@ pub fn scan_process(pid : u32, value: i64, target_bytes: &[u8], progress: &mut f
     results
 }
 
-/*
-for (int i = 0; i < memBlocks->size(); i++) {
-        PVOID pAddr = get<0>((*memBlocks)[i]);
-        SIZE_T size = get<1>((*memBlocks)[i]);
-        PVOID buf = malloc(size);
-        if (buf == NULL) {
-            wprintf(TEXT("Malloc failed %p (size: %zu bytes)\n"), pAddr, size);
-            return FALSE;
-        }
-        SIZE_T readBytes = NULL;
-        ReadProcessMemory(pHandle, pAddr, buf, size, &readBytes);
-        if (readBytes != size) {
-            continue; // Can't read protected page
-        }
-        UINT offset = 0;
-        PVOID rwBlockStart = buf;
-        PVOID rwBlockEnd = (PVOID) ((PBYTE)buf + size);
-        PVOID curAddr = (PVOID)((PBYTE)rwBlockStart + offset);
-        while (curAddr < rwBlockEnd) {
-            lookupType curValue = *(lookupType*)curAddr;
-            if (curValue == lookupValue) {
-                lookupType* addrInProcessLayout = (lookupType*)((PBYTE)pAddr + offset);
-                result->push_back(addrInProcessLayout);
-            }
-            offset += sizeof(lookupType);
-            curAddr = (PVOID)((PBYTE)rwBlockStart + offset);
-        }
-        free(buf);
-    }
-    return TRUE;
 
-*/
+
+pub fn filter_process(pid : u32, memory : &mut Memory, target_bytes: &[u8], target_type: &Datatype, progress: &mut f64) {
+    let num_bytes = target_bytes.len();
+
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE, false, pid);
+
+        if process.is_ok() {
+            let hprocess = process.unwrap();
+
+            let mut buffer: Vec<u8> = vec![0;num_bytes];
+            let mut bytes_read: usize = 0;
+            let mut i = 0f64;
+
+            macro_rules! update_mem_type{
+                ($($a:ident).+,$b:ty)=>{
+                    {
+                        let total = $($a).+.len() as f64;
+                        $($a).+.retain_mut(|l| {
+                            ReadProcessMemory(hprocess, l.address as *const _, buffer.as_mut_ptr() as *mut _, target_bytes.len(), Some(&mut bytes_read));
+                            l.old_value = l.value;
+                            l.value = <$b>::from_ne_bytes(buffer.clone().try_into().unwrap());
+                            i = i + 1.0;
+                            *progress = i / total;
+                            bytes_read == num_bytes && target_bytes == buffer
+                        });
+                    }
+                }
+            }
+
+            match *target_type {
+                Datatype::B1 => update_mem_type![memory.mem_u8,u8],
+                Datatype::B1S => update_mem_type![memory.mem_i8,i8],
+                Datatype::B2 => update_mem_type![memory.mem_u16,u16],
+                Datatype::B2S => update_mem_type![memory.mem_i16,i16],
+                Datatype::B4 => update_mem_type![memory.mem_u32,u32],
+                Datatype::B4S => update_mem_type![memory.mem_i32,i32],
+                Datatype::B8 => update_mem_type![memory.mem_u64,u64],
+                Datatype::B8S => update_mem_type![memory.mem_i64,i64],
+                Datatype::B16 => update_mem_type![memory.mem_u128,u128],
+                Datatype::B16S => update_mem_type![memory.mem_i128,i128],
+                Datatype::F => update_mem_type![memory.mem_f32,f32],
+                Datatype::D => update_mem_type![memory.mem_f64,f64],
+            }
+
+            CloseHandle(hprocess);
+        }
+    }
+}
+
 
 fn get_process_memory_pages(hprocess : HANDLE) -> Vec<MEMORY_BASIC_INFORMATION> {
     let mut pages = Vec::new();

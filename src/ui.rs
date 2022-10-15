@@ -175,13 +175,8 @@ fn draw_edit_memory<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .style(normal_style)
         .height(1)
         .bottom_margin(1);
-    let rows = app.memory_entries.iter().map(|item| {
-        //let cells = item.iter().map(|c| Cell::from(c.to_string().clone()));
-        let cells = vec![
-            Cell::from(format!("{:#016X}", item[0])),
-            Cell::from(item[1].to_string()),
-            Cell::from(item[2].to_string()),
-        ];
+    let rows = app.memory.iter().map(|item| {
+        let cells = item.iter().map(|c| Cell::from(c.clone()));
         Row::new(cells)
     });
    
@@ -205,8 +200,8 @@ fn draw_edit_memory<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     let rects = Layout::default()
         .constraints([
             Constraint::Length(3),
-            Constraint::Percentage(20),
-            Constraint::Max(5),
+            Constraint::Length(10),
+            Constraint::Length(3),
             Constraint::Percentage(40)
         ].as_ref())
         .direction(Direction::Vertical)
@@ -284,7 +279,7 @@ fn draw_edit_memory<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         
         let block = Block::default().title("Error").borders(Borders::ALL);
         
-        let msg = Text::from("Error selecting this process.");
+        let msg = Text::from(app.popup_error.clone());
         let msg = Paragraph::new(msg).alignment(Alignment::Center);
         
         let rects = Layout::default()

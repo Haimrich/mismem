@@ -1,6 +1,7 @@
 mod app;
 mod ui;
 mod win;
+mod mem;
 
 use std::{error::Error, io};
 
@@ -65,28 +66,32 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: app::App) -> io::Res
                 AppState::EditMemory => match app.edit_state {
                 
                     EditState::Select => match key.code {
-                        KeyCode::Left | KeyCode::Esc => {
-                            app.back()
+                        KeyCode::Down => app.memory_next(),
+                        KeyCode::Up => app.memory_previous(),
+                        KeyCode::Char('i') => {
+                            app.edit_state = EditState::Edit;
                         },
                         KeyCode::Char('s') => app.change_search_mode(),
                         KeyCode::Char('t') => app.change_search_datatype(),
                         KeyCode::Char('m') => app.change_search_type(),
-                        KeyCode::Char('i') => {
-                            app.edit_state = EditState::Edit;
+                        KeyCode::Left | KeyCode::Esc => {
+                            app.back()
                         },
-                        KeyCode::Down => app.memory_next(),
-                        KeyCode::Up => app.memory_previous(),
                         _ => {}
                     }
-                    EditState::Edit => match key.code {
-                        KeyCode::Enter => {
-                            app.search()
-                        },
-                        KeyCode::Esc => {
-                            app.edit_state = EditState::Select;
-                        },
-                        _ => {
-                            app.search_input.handle_event(&Event::Key(key));
+                    EditState::Edit => if app.show_popup { 
+                        app.show_popup = false;
+                    } else {
+                        match key.code {
+                            KeyCode::Enter => {
+                                app.search()
+                            },
+                            KeyCode::Esc => {
+                                app.edit_state = EditState::Select;
+                            },
+                            _ => {
+                                app.search_input.handle_event(&Event::Key(key));
+                            }
                         }
                     }
                     _ => {}
