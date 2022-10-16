@@ -26,7 +26,8 @@ use windows::Win32::{
             MEM_COMMIT,
         },
         Diagnostics::Debug::{
-            ReadProcessMemory,
+            ReadProcessMemory, 
+            WriteProcessMemory,
         },
     },
     UI::WindowsAndMessaging::{
@@ -159,7 +160,7 @@ pub fn filter_process(pid : u32, memory : &mut Memory, target_bytes: &[u8], targ
             let mut bytes_read: usize = 0;
             let mut i = 0f64;
 
-            macro_rules! update_mem_type{
+            macro_rules! filter_mem_type{
                 ($($a:ident).+,$b:ty)=>{
                     {
                         let total = $($a).+.len() as f64;
@@ -176,21 +177,97 @@ pub fn filter_process(pid : u32, memory : &mut Memory, target_bytes: &[u8], targ
             }
 
             match *target_type {
-                Datatype::B1 => update_mem_type![memory.mem_u8,u8],
-                Datatype::B1S => update_mem_type![memory.mem_i8,i8],
-                Datatype::B2 => update_mem_type![memory.mem_u16,u16],
-                Datatype::B2S => update_mem_type![memory.mem_i16,i16],
-                Datatype::B4 => update_mem_type![memory.mem_u32,u32],
-                Datatype::B4S => update_mem_type![memory.mem_i32,i32],
-                Datatype::B8 => update_mem_type![memory.mem_u64,u64],
-                Datatype::B8S => update_mem_type![memory.mem_i64,i64],
-                Datatype::B16 => update_mem_type![memory.mem_u128,u128],
-                Datatype::B16S => update_mem_type![memory.mem_i128,i128],
-                Datatype::F => update_mem_type![memory.mem_f32,f32],
-                Datatype::D => update_mem_type![memory.mem_f64,f64],
+                Datatype::B1 => filter_mem_type![memory.mem_u8,u8],
+                Datatype::B1S => filter_mem_type![memory.mem_i8,i8],
+                Datatype::B2 => filter_mem_type![memory.mem_u16,u16],
+                Datatype::B2S => filter_mem_type![memory.mem_i16,i16],
+                Datatype::B4 => filter_mem_type![memory.mem_u32,u32],
+                Datatype::B4S => filter_mem_type![memory.mem_i32,i32],
+                Datatype::B8 => filter_mem_type![memory.mem_u64,u64],
+                Datatype::B8S => filter_mem_type![memory.mem_i64,i64],
+                Datatype::B16 => filter_mem_type![memory.mem_u128,u128],
+                Datatype::B16S => filter_mem_type![memory.mem_i128,i128],
+                Datatype::F => filter_mem_type![memory.mem_f32,f32],
+                Datatype::D => filter_mem_type![memory.mem_f64,f64],
             }
 
             CloseHandle(hprocess);
+        }
+    }
+}
+
+
+
+pub fn update_process(pid : u32, memory : &mut Memory, progress: &mut f64) {
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE, false, pid);
+
+        if process.is_ok() {
+            let hprocess = process.unwrap();
+
+            let mut i = 0f64;
+            let total = memory.len() as f64;
+
+            macro_rules! update_mem_type{
+                ($($a:ident).+,$b:ty)=>{
+                    {
+                        let num_bytes = <$b>::default().to_ne_bytes().len();
+                        let mut buffer: Vec<u8> = vec![0;num_bytes];
+                        let mut bytes_read: usize = 0;
+                        $($a).+.retain_mut(|l| {
+                            ReadProcessMemory(hprocess, l.address as *const _, buffer.as_mut_ptr() as *mut _, num_bytes, Some(&mut bytes_read));
+                            l.old_value = l.value;
+                            l.value = <$b>::from_ne_bytes(buffer.clone().try_into().unwrap());
+                            i = i + 1.0;
+                            *progress = i / total;
+                            bytes_read == num_bytes
+                        });
+                    }
+                }
+            }
+
+            update_mem_type![memory.mem_u8,u8];
+            update_mem_type![memory.mem_i8,i8];
+            update_mem_type![memory.mem_u16,u16];
+            update_mem_type![memory.mem_i16,i16];
+            update_mem_type![memory.mem_u32,u32];
+            update_mem_type![memory.mem_i32,i32];
+            update_mem_type![memory.mem_u64,u64];
+            update_mem_type![memory.mem_i64,i64];
+            update_mem_type![memory.mem_u128,u128];
+            update_mem_type![memory.mem_i128,i128];
+            update_mem_type![memory.mem_f32,f32];
+            update_mem_type![memory.mem_f64,f64];
+
+            CloseHandle(hprocess);
+        }
+    }
+}
+
+
+pub fn write_process(pid : u32, address : usize, target_bytes: &[u8], target_type: &Datatype) -> bool {
+    let num_bytes = target_bytes.len();
+
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE, false, pid);
+
+        if process.is_ok() {
+            let hprocess = process.unwrap();
+            let mut bytes_written: usize = 0;
+
+            WriteProcessMemory(
+                hprocess,
+                address as *const _,
+                target_bytes.to_vec().as_ptr() as *const _,
+                num_bytes,
+                Some(&mut bytes_written)
+            );        
+
+            CloseHandle(hprocess);
+
+            bytes_written == num_bytes
+        } else {
+            false
         }
     }
 }

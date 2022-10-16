@@ -69,7 +69,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: app::App) -> io::Res
                         KeyCode::Down => app.memory_next(),
                         KeyCode::Up => app.memory_previous(),
                         KeyCode::Char('i') => {
-                            app.edit_state = EditState::Edit;
+                            app.edit_state = EditState::Input;
                         },
                         KeyCode::Char('s') => app.change_search_mode(),
                         KeyCode::Char('t') => app.change_search_datatype(),
@@ -77,14 +77,18 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: app::App) -> io::Res
                         KeyCode::Left | KeyCode::Esc => {
                             app.back()
                         },
+                        KeyCode::Enter => {
+                            app.select_memory()
+                        },
+                        KeyCode::Char('u') => app.update_memory(),
                         _ => {}
-                    }
-                    EditState::Edit => if app.show_popup { 
+                    },
+                    EditState::Input => if app.show_popup { 
                         app.show_popup = false;
                     } else {
                         match key.code {
                             KeyCode::Enter => {
-                                app.search()
+                                app.search();
                             },
                             KeyCode::Esc => {
                                 app.edit_state = EditState::Select;
@@ -93,7 +97,22 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: app::App) -> io::Res
                                 app.search_input.handle_event(&Event::Key(key));
                             }
                         }
-                    }
+                    },
+                    EditState::Edit => if app.show_popup { 
+                        app.show_popup = false;
+                    } else {
+                        match key.code {
+                            KeyCode::Enter => {
+                                app.mismem();
+                            },
+                            KeyCode::Esc => {
+                                app.edit_state = EditState::Select;
+                            },
+                            _ => {
+                                app.mismem_input.handle_event(&Event::Key(key));
+                            }
+                        }
+                    },
                     _ => {}
                 }
                 _ => {}

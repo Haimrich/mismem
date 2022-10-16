@@ -2,7 +2,7 @@ use tui::widgets::{TableState,ListState};
 use tui_input::Input;
 
 //use crate::win::enum_windows;
-use crate::win::{enum_processes,check_process,scan_process,filter_process};
+use crate::win::{enum_processes,check_process,scan_process,filter_process,update_process,write_process};
 use crate::mem::{Memory,Datatype};
 
 
@@ -36,8 +36,8 @@ pub struct App<> {
     pub show_popup: bool,
     pub popup_error : String,
 
-    // pub show_mismem_popup : bool,
-    // pub mismem_input: Input,
+    pub mismem_input: Input,
+    pub selected_address: String,
 }
 
 impl<> App<> {
@@ -62,6 +62,9 @@ impl<> App<> {
 
             show_popup: false,
             popup_error: String::new(),
+
+            mismem_input: Input::default(),
+            selected_address: String::new(),
         };
 
         app.search_mode.select(Some(0));
@@ -75,33 +78,18 @@ impl<> App<> {
     pub fn next(&mut self) {
         if self.show_popup { return; }
 
-        let i = match self.table_state.selected() {
-            Some(i) => {
-                if i >= self.processes.len() - 1 {
-                    0
-                } else {
-                    i + 1
-                }
-            }
-            None => 0,
-        };
-        self.table_state.select(Some(i));
+        self.table_state.select(Some(
+            (self.table_state.selected().unwrap_or(self.processes.len() - 1) + 1) % self.processes.len()
+        ));
+
     }
 
     pub fn previous(&mut self) {
         if self.show_popup { return; }
 
-        let i = match self.table_state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    self.processes.len() - 1
-                } else {
-                    i - 1
-                }
-            }
-            None => 0,
-        };
-        self.table_state.select(Some(i));
+        self.table_state.select(Some(
+            (self.processes.len() + self.table_state.selected().unwrap_or(0) - 1) % self.processes.len()
+        ));
     }
 
     pub fn update(&mut self) {
@@ -155,93 +143,41 @@ impl<> App<> {
 
 
     pub fn search(&mut self) {
+        macro_rules! popup_error{
+            ($e:expr)=>{{
+                self.popup_error = format!("Parsing error: {}", $e);
+                self.show_popup = true; 
+                return;
+            }}
+        }
+
+        macro_rules! parse{
+            ($t:ty,$d:expr)=>{ 
+                match self.search_input.value().parse::<$t>() {
+                    Ok(r) => (r.to_ne_bytes().to_vec(), $d),
+                    Err(e) => popup_error!(e)
+                }
+            };
+            ($t1:ty,$d1:expr;$t2:ty,$d2:expr)=>{ 
+                match self.search_input.value().parse::<$t1>() {
+                    Ok(r) => (r.to_ne_bytes().to_vec(), $d1),
+                    Err(_) => match self.search_input.value().parse::<$t2>() {
+                        Ok(r) => (r.to_ne_bytes().to_vec(), $d2),
+                        Err(e) => popup_error!(e)
+                    }
+                }
+            }
+        }
+
         // DATATYPE_OPTS = ["Byte", "2 Bytes","4 Bytes","8 Bytes","16 Bytes","Float","Double"];
         let (value_bytes, datatype) = match self.search_datatype.selected().unwrap_or(0) {
-            0 => { // Byte
-                match self.search_input.value().parse::<u8>() {
-                    Ok(r_u8) => (r_u8.to_ne_bytes().to_vec(), Datatype::B1),
-                    Err(_) => match self.search_input.value().parse::<i8>() {
-                        Ok(r_i8) => (r_i8.to_ne_bytes().to_vec(), Datatype::B1S),
-                        Err(e) => { 
-                            self.popup_error = format!("Parsing error: {e}");
-                            self.show_popup = true; 
-                            return;
-                        }
-                    }
-                }
-            },
-            1 => { // 2 Bytes
-                match self.search_input.value().parse::<u16>() {
-                    Ok(r_u16) => (r_u16.to_ne_bytes().to_vec(), Datatype::B2),
-                    Err(_) => match self.search_input.value().parse::<i16>() {
-                        Ok(r_i16) => (r_i16.to_ne_bytes().to_vec(), Datatype::B2S),
-                        Err(e) => { 
-                            self.popup_error = format!("Parsing error: {e}");
-                            self.show_popup = true; 
-                            return;
-                        }
-                    }
-                }
-            },
-            2 => { // 4 Bytes
-                match self.search_input.value().parse::<u32>() {
-                    Ok(r_u32) => (r_u32.to_ne_bytes().to_vec(), Datatype::B4),
-                    Err(_) => match self.search_input.value().parse::<i32>() {
-                        Ok(r_i32) => (r_i32.to_ne_bytes().to_vec(), Datatype::B4S),
-                        Err(e) => { 
-                            self.popup_error = format!("Parsing error: {e}");
-                            self.show_popup = true; 
-                            return;
-                        }
-                    }
-                }
-            },
-            3 => { // 8 Bytes
-                match self.search_input.value().parse::<u64>() {
-                    Ok(r_u64) => (r_u64.to_ne_bytes().to_vec(), Datatype::B8),
-                    Err(_) => match self.search_input.value().parse::<i64>() {
-                        Ok(r_i64) => (r_i64.to_ne_bytes().to_vec(), Datatype::B8S),
-                        Err(e) => { 
-                            self.popup_error = format!("Parsing error: {e}");
-                            self.show_popup = true; 
-                            return;
-                        }
-                    }
-                }
-            },
-            4 => { // 16 Bytes
-                match self.search_input.value().parse::<u128>() {
-                    Ok(r_u128) => (r_u128.to_ne_bytes().to_vec(), Datatype::B16),
-                    Err(_) => match self.search_input.value().parse::<i128>() {
-                        Ok(r_i128) => (r_i128.to_ne_bytes().to_vec(), Datatype::B16S),
-                        Err(e) => { 
-                            self.popup_error = format!("Parsing error: {e}");
-                            self.show_popup = true; 
-                            return;
-                        }
-                    }
-                }
-            },
-            5 => { // Float Bytes
-                match self.search_input.value().parse::<f32>() {
-                    Ok(r_f32) => (r_f32.to_ne_bytes().to_vec(), Datatype::F),
-                    Err(e) => { 
-                        self.popup_error = format!("Parsing error: {e}");
-                        self.show_popup = true; 
-                        return;
-                    }
-                }
-            },
-            6 => { // Double Bytes
-                match self.search_input.value().parse::<f64>() {
-                    Ok(r_f64) => (r_f64.to_ne_bytes().to_vec(), Datatype::D),
-                    Err(e) => { 
-                        self.popup_error = format!("Parsing error: {e}");
-                        self.show_popup = true; 
-                        return;
-                    }
-                }
-            },
+            0 => parse!(u8, Datatype::B1; i8, Datatype::B1S), // Byte
+            1 => parse!(u16, Datatype::B2; i16, Datatype::B2S), // 2 Bytes
+            2 => parse!(u32, Datatype::B4; i32, Datatype::B4S), // 4 Bytes,
+            3 => parse!(u64, Datatype::B8; i64, Datatype::B8S), // 8 Bytes
+            4 => parse!(u128, Datatype::B16; i128, Datatype::B16S), // 16 Bytes
+            5 => parse!(f32, Datatype::F), // Float
+            6 => parse!(f64, Datatype::D), // Double
             _ => panic!("Illegal Value Type Option.")
         };
 
@@ -261,13 +197,79 @@ impl<> App<> {
         self.edit_state = EditState::Select;
     }
 
+
+    pub fn select_memory(&mut self) {
+        
+        let memory_idx = self.table_state.selected().unwrap_or_default();
+        let entry = self.memory.iter().nth(memory_idx);
+
+        match entry {
+            Some(entry) => {
+                self.edit_state = EditState::Edit;
+                self.mismem_input = Input::new(entry[1].clone());
+                self.selected_address = entry[0].clone();
+            }
+            _ => {}
+        }
+    }
+
+    
+    pub fn update_memory(&mut self) {
+        update_process(self.selected_process, &mut self.memory, &mut self.search_progress);
+    }
+
+    pub fn mismem(&mut self) {
+        macro_rules! popup_error{
+            ($e:expr)=>{{
+                self.popup_error = format!("Parsing error: {}", $e);
+                self.show_popup = true; 
+                return;
+            }}
+        }
+
+        macro_rules! parse{
+            ($t:ty,$d:expr)=>{ 
+                match self.mismem_input.value().parse::<$t>() {
+                    Ok(r) => (r.to_ne_bytes().to_vec(), $d),
+                    Err(e) => popup_error!(e)
+                }
+            };
+        }
+
+        let mut tokens = self.selected_address.split(':');
+        let address = usize::from_str_radix(tokens.next().unwrap(), 16).unwrap();
+        let (new_value_bytes, datatype)  = match tokens.next().unwrap() {
+            "u8" => parse!(u8,Datatype::B1),
+            "i8" => parse!(i8, Datatype::B1S),
+            "u16" => parse!(u16, Datatype::B2),
+            "i16" => parse!(i16, Datatype::B2S),
+            "u32" => parse!(u32, Datatype::B4),
+            "i32" => parse!(i32, Datatype::B4S),
+            "u64" => parse!(u64, Datatype::B8),
+            "i64" => parse!(i64, Datatype::B8S),
+            "u128" => parse!(u128, Datatype::B16),
+            "i128" => parse!(i128, Datatype::B16S),
+            "f32" => parse!(f32, Datatype::F),
+            "f64" => parse!(f64, Datatype::D),
+            _ => panic!("Unrecognized type name"),
+        };
+        
+        self.update_memory();
+        self.edit_state = EditState::Select;
+
+        if !write_process(self.selected_process, address, &new_value_bytes, &datatype) {
+            self.popup_error = String::from("Error: can't write at target address.");
+            self.show_popup = true; 
+        }
+    }
+
     // EditMem
 
     pub fn memory_next(&mut self) {
         if self.show_popup { return; }
 
         self.table_state.select(Some(
-            (self.table_state.selected().unwrap_or(0) + 1) % self.memory.len()
+            (self.table_state.selected().unwrap_or(self.memory.len() - 1) + 1) % self.memory.len()
         ));
     }
 

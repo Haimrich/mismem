@@ -94,55 +94,26 @@ impl Memory {
     }
 
     pub fn push(&mut self, address: usize, target_type: &Datatype, target_bytes: &[u8]) {
+        macro_rules! mem_push{
+            ($t:ty,$mem:ident)=>{{
+                let value = <$t>::from_ne_bytes(target_bytes.try_into().unwrap());
+                self.$mem.push(Location::<$t>{address: address, value: value, old_value: value});
+            }}
+        }
+
         match *target_type {
-            Datatype::B1 => {
-                let value = u8::from_ne_bytes(target_bytes.try_into().unwrap());
-                self.mem_u8.push(Location::<u8>{address: address, value: value, old_value: value});
-            },
-            Datatype::B1S => {
-                let value = i8::from_ne_bytes(target_bytes.try_into().unwrap());
-                self.mem_i8.push(Location::<i8>{address: address, value: value, old_value: value});
-            },
-            Datatype::B2 => {
-                let value = u16::from_ne_bytes(target_bytes.try_into().unwrap());
-                self.mem_u16.push(Location::<u16>{address: address, value: value, old_value: value});
-            },
-            Datatype::B2S => {
-                let value = i16::from_ne_bytes(target_bytes.try_into().unwrap());
-                self.mem_i16.push(Location::<i16>{address: address, value: value, old_value: value});
-            },
-            Datatype::B4 => {
-                let value = u32::from_ne_bytes(target_bytes.try_into().unwrap());
-                self.mem_u32.push(Location::<u32>{address: address, value: value, old_value: value});
-            },
-            Datatype::B4S => {
-                let value = i32::from_ne_bytes(target_bytes.try_into().unwrap());
-                self.mem_i32.push(Location::<i32>{address: address, value: value, old_value: value});
-            },
-            Datatype::B8 => {
-                let value = u64::from_ne_bytes(target_bytes.try_into().unwrap());
-                self.mem_u64.push(Location::<u64>{address: address, value: value, old_value: value});
-            },
-            Datatype::B8S => {
-                let value = i64::from_ne_bytes(target_bytes.try_into().unwrap());
-                self.mem_i64.push(Location::<i64>{address: address, value: value, old_value: value});
-            },
-            Datatype::B16 => {
-                let value = u128::from_ne_bytes(target_bytes.try_into().unwrap());
-                self.mem_u128.push(Location::<u128>{address: address, value: value, old_value: value});
-            },
-            Datatype::B16S => {
-                let value = i128::from_ne_bytes(target_bytes.try_into().unwrap());
-                self.mem_i128.push(Location::<i128>{address: address, value: value, old_value: value});
-            },
-            Datatype::F => {
-                let value = f32::from_ne_bytes(target_bytes.try_into().unwrap());
-                self.mem_f32.push(Location::<f32>{address: address, value: value, old_value: value});
-            },
-            Datatype::D => {
-                let value = f64::from_ne_bytes(target_bytes.try_into().unwrap());
-                self.mem_f64.push(Location::<f64>{address: address, value: value, old_value: value});
-            }
+            Datatype::B1 => mem_push!(u8,mem_u8),
+            Datatype::B1S => mem_push!(i8,mem_i8),
+            Datatype::B2 => mem_push!(u16,mem_u16),
+            Datatype::B2S => mem_push!(i16,mem_i16),
+            Datatype::B4 => mem_push!(u32,mem_u32),
+            Datatype::B4S => mem_push!(i32,mem_i32),
+            Datatype::B8 => mem_push!(u64,mem_u64),
+            Datatype::B8S => mem_push!(i64,mem_i64),
+            Datatype::B16 => mem_push!(u128,mem_u128),
+            Datatype::B16S => mem_push!(i128,mem_i128),
+            Datatype::F => mem_push!(f32,mem_f32),
+            Datatype::D => mem_push!(f64,mem_f64)
         }
     }
 
@@ -170,141 +141,57 @@ impl<'a> Iterator for MemoryIterator<'a> {
         let mut min_address = usize::MAX;
         let mut min_type_id = 0;
 
-        if self.curs[0] < self.memory.mem_i128.len() {
-            if self.memory.mem_i128[self.curs[0]].address < min_address {
-                min_address = self.memory.mem_i128[self.curs[0]].address;
-                min_type_id = 0;
+        macro_rules! check_min_address{
+            ($mem:ident,$id:expr)=>{ 
+                if self.curs[$id] < self.memory.$mem.len() {
+                    if self.memory.$mem[self.curs[$id]].address < min_address {
+                        min_address = self.memory.$mem[self.curs[$id]].address;
+                        min_type_id = $id;
+                    }
+                }
             }
         }
-        if self.curs[1] < self.memory.mem_u128.len() {
-            if self.memory.mem_u128[self.curs[1]].address < min_address {
-                min_address = self.memory.mem_u128[self.curs[1]].address;
-                min_type_id = 1;
-            }
-        }
-        if self.curs[2] < self.memory.mem_i64.len() {
-            if self.memory.mem_i64[self.curs[2]].address < min_address {
-                min_address = self.memory.mem_i64[self.curs[2]].address;
-                min_type_id = 2;
-            }
-        }
-        if self.curs[3] < self.memory.mem_u64.len() {
-            if self.memory.mem_u64[self.curs[3]].address < min_address {
-                min_address = self.memory.mem_u64[self.curs[3]].address;
-                min_type_id = 3;
-            }
-        }
-        if self.curs[4] < self.memory.mem_i32.len() {
-            if self.memory.mem_i32[self.curs[4]].address < min_address {
-                min_address = self.memory.mem_i32[self.curs[4]].address;
-                min_type_id = 4;
-            }
-        }
-        if self.curs[5] < self.memory.mem_u32.len() {
-            if self.memory.mem_u32[self.curs[5]].address < min_address {
-                min_address = self.memory.mem_u32[self.curs[5]].address;
-                min_type_id = 5;
-            }
-        }
-        if self.curs[6] < self.memory.mem_i16.len() {
-            if self.memory.mem_i16[self.curs[6]].address < min_address {
-                min_address = self.memory.mem_i16[self.curs[6]].address;
-                min_type_id = 6;
-            }
-        }
-        if self.curs[7] < self.memory.mem_u16.len() {
-            if self.memory.mem_u16[self.curs[7]].address < min_address {
-                min_address = self.memory.mem_u16[self.curs[7]].address;
-                min_type_id = 7;
-            }
-        }
-        if self.curs[8] < self.memory.mem_i8.len() {
-            if self.memory.mem_i8[self.curs[8]].address < min_address {
-                min_address = self.memory.mem_i8[self.curs[8]].address;
-                min_type_id = 8;
-            }
-        }
-        if self.curs[9] < self.memory.mem_u8.len() {
-            if self.memory.mem_u8[self.curs[9]].address < min_address {
-                min_address = self.memory.mem_u8[self.curs[9]].address;
-                min_type_id = 9;
-            }
-        }
-        if self.curs[10] < self.memory.mem_f64.len() {
-            if self.memory.mem_f64[self.curs[10]].address < min_address {
-                min_address = self.memory.mem_f64[self.curs[10]].address;
-                min_type_id = 10;
-            }
-        }
-        if self.curs[11] < self.memory.mem_f32.len() {
-            if self.memory.mem_f32[self.curs[11]].address < min_address {
-                min_address = self.memory.mem_f32[self.curs[11]].address;
-                min_type_id = 11;
+
+        check_min_address!(mem_i128,0);
+        check_min_address!(mem_u128,1);
+        check_min_address!(mem_i64,2);
+        check_min_address!(mem_u64,3);
+        check_min_address!(mem_i32,4);
+        check_min_address!(mem_u32,5);
+        check_min_address!(mem_i16,6);
+        check_min_address!(mem_u16,7);
+        check_min_address!(mem_i8,8);
+        check_min_address!(mem_u8,9);
+        check_min_address!(mem_f64,10);
+        check_min_address!(mem_f32,11);
+
+        macro_rules! get_next_entry{
+            ($mem:ident,$suffix:expr)=>{ 
+                Some([
+                    format!("{:016X}{}", self.memory.$mem[self.curs[min_type_id]].address,$suffix),
+                    self.memory.$mem[self.curs[min_type_id]].value.to_string(),
+                    self.memory.$mem[self.curs[min_type_id]].old_value.to_string(),
+                ])
+            };
+            ($mem:ident)=>{
+                get_next_entry!($mem,"")
             }
         }
 
         let next = if min_address != usize::MAX {
             match min_type_id {
-                0 => Some([
-                    format!("{:#016X}", self.memory.mem_i128[self.curs[min_type_id]].address),
-                    self.memory.mem_i128[self.curs[min_type_id]].value.to_string(),
-                    self.memory.mem_i128[self.curs[min_type_id]].old_value.to_string(),
-                ]),
-                1 => Some([
-                    format!("{:#016X}", self.memory.mem_u128[self.curs[min_type_id]].address),
-                    self.memory.mem_u128[self.curs[min_type_id]].value.to_string(),
-                    self.memory.mem_u128[self.curs[min_type_id]].old_value.to_string(),
-                ]),
-                2 => Some([
-                    format!("{:#016X}", self.memory.mem_i64[self.curs[min_type_id]].address),
-                    self.memory.mem_i64[self.curs[min_type_id]].value.to_string(),
-                    self.memory.mem_i64[self.curs[min_type_id]].old_value.to_string(),
-                ]),
-                3 => Some([
-                    format!("{:#016X}", self.memory.mem_u64[self.curs[min_type_id]].address),
-                    self.memory.mem_u64[self.curs[min_type_id]].value.to_string(),
-                    self.memory.mem_u64[self.curs[min_type_id]].old_value.to_string(),
-                ]),
-                4 => Some([
-                    format!("{:#016X}", self.memory.mem_i32[self.curs[min_type_id]].address),
-                    self.memory.mem_i32[self.curs[min_type_id]].value.to_string(),
-                    self.memory.mem_i32[self.curs[min_type_id]].old_value.to_string(),
-                ]),
-                5 => Some([
-                    format!("{:#016X}", self.memory.mem_u32[self.curs[min_type_id]].address),
-                    self.memory.mem_i32[self.curs[min_type_id]].value.to_string(),
-                    self.memory.mem_i32[self.curs[min_type_id]].old_value.to_string(),
-                ]),
-                6 => Some([
-                    format!("{:#016X}", self.memory.mem_i16[self.curs[min_type_id]].address),
-                    self.memory.mem_i16[self.curs[min_type_id]].value.to_string(),
-                    self.memory.mem_i16[self.curs[min_type_id]].old_value.to_string(),
-                ]),
-                7 => Some([
-                    format!("{:#016X}", self.memory.mem_u16[self.curs[min_type_id]].address),
-                    self.memory.mem_u16[self.curs[min_type_id]].value.to_string(),
-                    self.memory.mem_u16[self.curs[min_type_id]].old_value.to_string(),
-                ]),
-                8 => Some([
-                    format!("{:#016X}", self.memory.mem_i8[self.curs[min_type_id]].address),
-                    self.memory.mem_i8[self.curs[min_type_id]].value.to_string(),
-                    self.memory.mem_i8[self.curs[min_type_id]].old_value.to_string(),
-                ]),
-                9 => Some([
-                    format!("{:#016X}", self.memory.mem_u8[self.curs[min_type_id]].address),
-                    self.memory.mem_u8[self.curs[min_type_id]].value.to_string(),
-                    self.memory.mem_u8[self.curs[min_type_id]].old_value.to_string(),
-                ]),
-                10 => Some([
-                    format!("{:#016X}", self.memory.mem_f64[self.curs[min_type_id]].address),
-                    self.memory.mem_f64[self.curs[min_type_id]].value.to_string(),
-                    self.memory.mem_f64[self.curs[min_type_id]].old_value.to_string(),
-                ]),
-                11 => Some([
-                    format!("{:#016X}", self.memory.mem_f32[self.curs[min_type_id]].address),
-                    self.memory.mem_f32[self.curs[min_type_id]].value.to_string(),
-                    self.memory.mem_f32[self.curs[min_type_id]].old_value.to_string(),
-                ]),
+                0 => get_next_entry!(mem_i128,":i128"),
+                1 => get_next_entry!(mem_u128,":u128"),
+                2 => get_next_entry!(mem_i64,":i64"),
+                3 => get_next_entry!(mem_u64,":u64"),
+                4 => get_next_entry!(mem_i32,":i32"),
+                5 => get_next_entry!(mem_u32,":u32"),
+                6 => get_next_entry!(mem_i16,":i16"),
+                7 => get_next_entry!(mem_u16,":u16"),
+                8 => get_next_entry!(mem_i8,":i8"),
+                9 => get_next_entry!(mem_u8,":u8"),
+                10 => get_next_entry!(mem_f64,":f64"),
+                11 => get_next_entry!(mem_f32,":f32"),
                 _ => None
             }
         } else {

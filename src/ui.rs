@@ -90,7 +90,7 @@ fn draw_select_process<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     if app.show_popup {
         let area = centered_rect(60, 20, size);
         
-        let block = Block::default().title("Error").borders(Borders::ALL);
+        let block = Block::default().title("Error").title_alignment(Alignment::Center).borders(Borders::ALL).style(Style::default().fg(Color::Yellow));
         
         let msg = Text::from("Error selecting this process.");
         let msg = Paragraph::new(msg).alignment(Alignment::Center);
@@ -182,10 +182,13 @@ fn draw_edit_memory<B: Backend>(f: &mut Frame<B>, app: &mut App) {
    
     let t = Table::new(rows)
         .header(header)
-        .block(Block::default().borders(Borders::ALL).title(" 💾 Results ").style(match app.edit_state {
-            EditState::Select => Style::default().fg(Color::Yellow),
-            _ => Style::default(),
-        }))
+        .block(Block::default().borders(Borders::ALL)
+            .title(" 💾 Results ")
+            .style(if matches!(app.edit_state, EditState::Select) && !app.show_popup {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            }))
         .highlight_style(selected_style)
         .highlight_symbol(">> ")
         .widths(&[
@@ -210,21 +213,19 @@ fn draw_edit_memory<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     let width = rects[1].width.max(3) - 3;
     let scroll = (app.search_input.cursor() as u16).max(width) - width;
     let input = Paragraph::new(app.search_input.value())
-        .style(match app.edit_state {
-            EditState::Edit => Style::default().fg(Color::Yellow),
-            _ => Style::default(),
+        .style(if matches!(app.edit_state, EditState::Input) && !app.show_popup {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default()
         })
         .scroll((0, scroll))
         .block(Block::default().borders(Borders::ALL).title(" 🔎 Search ").title_alignment(Alignment::Center));
     f.render_widget(input, rects[0]);
-    match app.edit_state {
-        EditState::Edit => {
-            f.set_cursor(
-                rects[0].x + (app.search_input.cursor() as u16).min(width) + 1,
-                rects[0].y + 1,
-            )
-        },
-        _ => {}
+    if matches!(app.edit_state, EditState::Input) && !app.show_popup {
+        f.set_cursor(
+            rects[0].x + (app.search_input.cursor() as u16).min(width) + 1,
+            rects[0].y + 1,
+        )
     }
 
     let label = format!("{:.1}%", app.search_progress * 100.0);
@@ -273,11 +274,57 @@ fn draw_edit_memory<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     f.render_stateful_widget(list, rects[2], &mut app.search_type);
     
 
+    // Input Popup
+    if matches!(app.edit_state, EditState::Edit) {
+        let percent_x = 60;
+        let popup_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(
+                [
+                    Constraint::Percentage(50),
+                    Constraint::Length(3),
+                    Constraint::Percentage(40),
+                ]
+                .as_ref(),
+            )
+            .split(size);
+
+        let area = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(
+                [
+                    Constraint::Percentage((100 - percent_x) / 2),
+                    Constraint::Percentage(percent_x),
+                    Constraint::Percentage((100 - percent_x) / 2),
+                ]
+                .as_ref(),
+            )
+            .split(popup_layout[1])[1];
+        
+
+        let width = area.width.max(3) - 3;
+        let scroll = (app.mismem_input.cursor() as u16).max(width) - width;
+        let input = Paragraph::new(app.mismem_input.value())
+            .style(Style::default().fg(Color::Yellow))
+            .scroll((0, scroll))
+            .block(Block::default().borders(Borders::ALL).title(format!(" 💉 New Value for {}",app.selected_address)).title_alignment(Alignment::Center));
+
+        f.render_widget(Clear, area);
+        f.render_widget(input, area);
+        if !app.show_popup {
+            f.set_cursor(
+                area.x + (app.mismem_input.cursor() as u16).min(width) + 1,
+                area.y + 1,
+            );
+        }
+    }
+
+
     // Error Popup
     if app.show_popup {
         let area = centered_rect(60, 20, size);
         
-        let block = Block::default().title("Error").borders(Borders::ALL);
+        let block = Block::default().title(" Error ").title_alignment(Alignment::Center).borders(Borders::ALL).style(Style::default().fg(Color::Yellow));
         
         let msg = Text::from(app.popup_error.clone());
         let msg = Paragraph::new(msg).alignment(Alignment::Center);
@@ -293,6 +340,7 @@ fn draw_edit_memory<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         f.render_widget(block, area);
         f.render_widget(msg, rects[1]);
     }
+    
 }
 
 
