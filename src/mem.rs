@@ -23,6 +23,7 @@ pub struct Location<T: fmt::Display> {
     pub old_value: T,
 }
 
+#[derive(Default)]
 pub struct Memory {
 
     pub mem_i128: Vec<Location<i128>>, 

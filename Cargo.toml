@@ -1,12 +1,16 @@
 [package]
 name = "mismem"
-version = "0.1.0"
-edition = "2018"
+version = "0.2.0"
+edition = "2021"
+default-run = "mismem"
 
 [dependencies]
 tui = "0.19"
 crossterm = "0.25"
 tui-input = "*"
+log = "0.4"
+tui-logger = "0.8.0"
+tokio = { version = "1", features = ["full"] }
 
 [dependencies.windows]
 version = "0.42.0"
@@ -18,3 +22,7 @@ features = [
     "Win32_System_Diagnostics_Debug",
     "Win32_UI_WindowsAndMessaging",
 ]
+
+[[bin]]
+name = "dummy"
+path = "src/dummy.rs"

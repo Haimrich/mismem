@@ -1,8 +1,15 @@
-use std::{mem::{self, size_of}, ops::BitAnd, convert::TryInto};
+use std::{
+    mem::{size_of_val, size_of}, 
+    ops::BitAnd, 
+    convert::TryInto, 
+    sync::Arc
+};
+
+use tokio::sync::Mutex;
 
 use windows::Win32::{
     Foundation::{
-        BOOL, HWND, LPARAM, HINSTANCE, HANDLE,
+        HINSTANCE, HANDLE,
         CloseHandle,
     }, 
     System::{
@@ -30,12 +37,9 @@ use windows::Win32::{
             WriteProcessMemory,
         },
     },
-    UI::WindowsAndMessaging::{
-        EnumWindows, 
-        GetWindowTextW
-    },
 };
 
+use crate::app::App;
 use crate::mem::{Memory,Datatype};
 
 
@@ -45,13 +49,14 @@ pub struct WinProc {
     pub pid: u32,
 }
 
+
 pub fn enum_processes() -> Vec<WinProc> {
     let mut processes = Vec::<WinProc>::new();
 
     let mut pids: [u32; 4096] = [0; 4096];
     let mut np: u32 = 0;
     unsafe {
-        K32EnumProcesses(pids.as_mut_ptr(), mem::size_of_val(&pids) as u32, &mut np);
+        K32EnumProcesses(pids.as_mut_ptr(), size_of_val(&pids) as u32, &mut np);
         for pid in &pids[..np as usize] {
             let process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, *pid);
 
@@ -60,7 +65,7 @@ pub fn enum_processes() -> Vec<WinProc> {
                 let mut module = HINSTANCE::default();
                 let mut cb = 0;
                 
-                if K32EnumProcessModules(process, &mut module, mem::size_of_val(&module) as u32, &mut cb).as_bool()
+                if K32EnumProcessModules(process, &mut module, size_of_val(&module) as u32, &mut cb).as_bool()
                 {
                     // Get Process Name
                     let mut name: [u16; 512] = [0; 512];
@@ -69,7 +74,7 @@ pub fn enum_processes() -> Vec<WinProc> {
                     
                     // Get Process Memory Usage
                     let mut pmemcounters = PROCESS_MEMORY_COUNTERS::default();
-                    let mem_usage = if K32GetProcessMemoryInfo(process, &mut pmemcounters, mem::size_of_val(&pmemcounters) as u32).as_bool() {
+                    let mem_usage = if K32GetProcessMemoryInfo(process, &mut pmemcounters, size_of_val(&pmemcounters) as u32).as_bool() {
                         (pmemcounters.WorkingSetSize / 1024) as f64
                     } else {
                         0.0
@@ -100,76 +105,105 @@ pub fn check_process(pid : u32) -> bool {
 }
 
 
-pub fn scan_process(pid : u32, target_bytes: &[u8], target_type: &Datatype, progress: &mut f64) -> Memory {
+struct MemInfo<T> {
+    base: *const T,
+    size: usize,
+}
+unsafe impl<T> Send for MemInfo<T> {}
+unsafe impl<T> Sync for MemInfo<T> {}
+
+
+pub async fn scan_process(pid : u32, target_bytes: &[u8], target_type: &Datatype, app_mutex: Arc<Mutex<App>>) {
     let mut results = Memory::new();
     let num_bytes = target_bytes.len();
 
-    unsafe {
-        let process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE, false, pid);
+    match unsafe { OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE, false, pid) } 
+    {
+        Ok(process) => {
+            let mut app = app_mutex.lock().await;
+            app.memory = Memory::new();
+            drop(app);
 
-        if process.is_ok() {
-            let hprocess = process.unwrap();
-            let pages = get_process_memory_pages(hprocess);
+            let pages = get_process_memory_pages(process).iter()
+                .map(|&x| MemInfo{base: x.BaseAddress as *const _, size: x.RegionSize})
+                .collect::<Vec<_>>();
+            
+            let mut sweeped_memory : usize = 0;
+            let total_memory = pages.iter().map(|p| p.size).sum::<usize>() as f64;
 
-            for (i, page) in pages.iter().enumerate() {
-
-                let mut buffer: Vec<u8> = Vec::with_capacity(page.RegionSize);
+            for page in pages.iter() {
+                let mut buffer: Vec<u8> = Vec::with_capacity(page.size);
                 let mut bytes_read: usize = 0;
 
-                ReadProcessMemory(
-                    hprocess,
-                    page.BaseAddress as *const _,
+                unsafe { ReadProcessMemory(
+                    process,
+                    page.base,
                     buffer.as_mut_ptr() as *mut _,
-                    page.RegionSize,
+                    page.size,
                     Some(&mut bytes_read)
-                );
+                ) };
 
-                if page.RegionSize != bytes_read {
-                    continue;
+                if page.size == bytes_read 
+                {
+                    unsafe { buffer.set_len(bytes_read) };
+    
+                    buffer.windows(num_bytes).enumerate().for_each(|(offset, window)| {
+                        if window == target_bytes {
+                            results.push(page.base as usize + offset, target_type, target_bytes);
+                        }
+                    });
                 }
-                buffer.set_len(bytes_read);
 
-                buffer.windows(num_bytes).enumerate().for_each(|(offset, window)| {
-                    if window == target_bytes {
-                        results.push(page.BaseAddress as usize + offset, target_type, target_bytes);
-                    }
-                });
-
-                *progress = (i+1) as f64 / pages.len() as f64;
+                sweeped_memory += page.size;
+                let mut app = app_mutex.lock().await;
+                app.search_progress = sweeped_memory as f64 / total_memory;
             }
 
+            unsafe { CloseHandle(process) };
 
-            CloseHandle(hprocess);
+            let mut app = app_mutex.lock().await;
+            app.search_progress = 1f64;
+            app.memory = std::mem::take(&mut results);
+            log::info!(" First Scan found {} entries.", app.memory.len());
+        },
+        Err(error) => {
+            log::error!("Error while analyzing process: {:?}", error);
         }
     }
-    results
 }
 
 
-
-pub fn filter_process(pid : u32, memory : &mut Memory, target_bytes: &[u8], target_type: &Datatype, progress: &mut f64) {
+pub async fn filter_process(pid : u32, target_bytes: &[u8], target_type: &Datatype, app_mutex: Arc<Mutex<App>>) {
     let num_bytes = target_bytes.len();
 
-    unsafe {
-        let process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE, false, pid);
-
-        if process.is_ok() {
-            let hprocess = process.unwrap();
+    match unsafe { OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE, false, pid) } 
+    {
+        Ok(process) => {
+            let mut app = app_mutex.lock().await;
+            let mut memory = std::mem::take(&mut app.memory);
+            drop(app);
 
             let mut buffer: Vec<u8> = vec![0;num_bytes];
             let mut bytes_read: usize = 0;
-            let mut i = 0f64;
+            
+            let mut sweeped_memory : usize = 0;
+            let total_memory = memory.len();
+            let progress_update_freq = std::cmp::max(total_memory, total_memory / 100);
 
             macro_rules! filter_mem_type{
                 ($($a:ident).+,$b:ty)=>{
-                    {
-                        let total = $($a).+.len() as f64;
+                    {                        
                         $($a).+.retain_mut(|l| {
-                            ReadProcessMemory(hprocess, l.address as *const _, buffer.as_mut_ptr() as *mut _, target_bytes.len(), Some(&mut bytes_read));
+                            unsafe { ReadProcessMemory(process, l.address as *const _, buffer.as_mut_ptr() as *mut _, target_bytes.len(), Some(&mut bytes_read)) };
                             l.old_value = l.value;
                             l.value = <$b>::from_ne_bytes(buffer.clone().try_into().unwrap());
-                            i = i + 1.0;
-                            *progress = i / total;
+                            sweeped_memory += 1;
+
+                            if sweeped_memory % progress_update_freq == 0 {
+                                if let Ok(mut app) = app_mutex.try_lock() {
+                                    app.search_progress = sweeped_memory as f64 / total_memory as f64; 
+                                }
+                            }
                             bytes_read == num_bytes && target_bytes == buffer
                         });
                     }
@@ -191,22 +225,33 @@ pub fn filter_process(pid : u32, memory : &mut Memory, target_bytes: &[u8], targ
                 Datatype::D => filter_mem_type![memory.mem_f64,f64],
             }
 
-            CloseHandle(hprocess);
+            unsafe { CloseHandle(process) };
+
+            let mut app = app_mutex.lock().await;
+            app.memory = std::mem::take(&mut memory);
+            app.search_progress = 1f64;
+            log::info!(" {} entries remaining after filtering.", app.memory.len());
+        },
+        Err(error) => {
+            log::error!("Error while analyzing process: {:?}", error);
         }
     }
 }
 
 
+pub async fn update_process(app_mutex : Arc<Mutex<App>>) {
+    let mut app = app_mutex.lock().await;
+    let pid = app.selected_process;
 
-pub fn update_process(pid : u32, memory : &mut Memory, progress: &mut f64) {
-    unsafe {
-        let process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE, false, pid);
+    match unsafe { OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE, false, pid) }
+    {
+        Ok(process) => {
+            let mut memory = std::mem::take(&mut app.memory);
+            drop(app);
 
-        if process.is_ok() {
-            let hprocess = process.unwrap();
-
-            let mut i = 0f64;
-            let total = memory.len() as f64;
+            let mut i : usize = 0;
+            let memory_size = memory.len();
+            let progress_update_freq = std::cmp::max(memory_size, memory_size / 100);
 
             macro_rules! update_mem_type{
                 ($($a:ident).+,$b:ty)=>{
@@ -214,12 +259,18 @@ pub fn update_process(pid : u32, memory : &mut Memory, progress: &mut f64) {
                         let num_bytes = <$b>::default().to_ne_bytes().len();
                         let mut buffer: Vec<u8> = vec![0;num_bytes];
                         let mut bytes_read: usize = 0;
+
                         $($a).+.retain_mut(|l| {
-                            ReadProcessMemory(hprocess, l.address as *const _, buffer.as_mut_ptr() as *mut _, num_bytes, Some(&mut bytes_read));
+                            unsafe { ReadProcessMemory(process, l.address as *const _, buffer.as_mut_ptr() as *mut _, num_bytes, Some(&mut bytes_read)) };
                             l.old_value = l.value;
                             l.value = <$b>::from_ne_bytes(buffer.clone().try_into().unwrap());
-                            i = i + 1.0;
-                            *progress = i / total;
+                            i += 1;
+                            
+                            if i % progress_update_freq == 0 {
+                                if let Ok(mut app) = app_mutex.try_lock() {
+                                    app.search_progress = i as f64 / memory_size as f64; 
+                                }
+                            }
                             bytes_read == num_bytes
                         });
                     }
@@ -239,35 +290,43 @@ pub fn update_process(pid : u32, memory : &mut Memory, progress: &mut f64) {
             update_mem_type![memory.mem_f32,f32];
             update_mem_type![memory.mem_f64,f64];
 
-            CloseHandle(hprocess);
+            unsafe { CloseHandle(process) };
+
+            let mut app = app_mutex.lock().await;
+            app.search_progress = 1f64;
+            app.memory = std::mem::take(&mut memory);
+        },
+        Err(error) => {
+            log::error!("Error while analyzing process: {:?}", error);
         }
     }
 }
 
 
-pub fn write_process(pid : u32, address : usize, target_bytes: &[u8], target_type: &Datatype) -> bool {
+pub fn write_process(pid : u32, address : usize, target_bytes: &[u8]) -> bool {
     let num_bytes = target_bytes.len();
 
-    unsafe {
-        let process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE, false, pid);
+    unsafe { 
+        match OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE, false, pid)
+        {
+            Ok(process) => {
+                let mut bytes_written: usize = 0;
 
-        if process.is_ok() {
-            let hprocess = process.unwrap();
-            let mut bytes_written: usize = 0;
+                WriteProcessMemory(
+                    process,
+                    address as *const _,
+                    target_bytes.to_vec().as_ptr() as *const _,
+                    num_bytes,
+                    Some(&mut bytes_written)
+                ); 
 
-            WriteProcessMemory(
-                hprocess,
-                address as *const _,
-                target_bytes.to_vec().as_ptr() as *const _,
-                num_bytes,
-                Some(&mut bytes_written)
-            );        
+                CloseHandle(process);
 
-            CloseHandle(hprocess);
-
-            bytes_written == num_bytes
-        } else {
-            false
+                bytes_written == num_bytes
+            },
+            Err(_) => {
+                false
+            }
         }
     }
 }
@@ -288,40 +347,3 @@ fn get_process_memory_pages(hprocess : HANDLE) -> Vec<MEMORY_BASIC_INFORMATION> 
     }
     pages
 }
-
-
-/*
-pub struct WinApp {
-    pub name: String,
-    pub memory: f64,
-    pub hwnd: HWND,
-}
-
-
-pub fn enum_windows() -> Vec<WinApp> {
-    let mut wnds = Vec::<WinApp>::new();
-    let wnds_ptr = &mut wnds as *mut _;
-
-    unsafe {
-        EnumWindows(Some(enum_window), LPARAM(wnds_ptr as isize));
-    }
-
-    wnds
-}
-
-extern "system" fn enum_window(window: HWND, wnds_ptr : LPARAM) -> BOOL {
-    unsafe {
-        let mut text: [u16; 512] = [0; 512];
-        let len = GetWindowTextW(window, &mut text);
-        let text = String::from_utf16_lossy(&text[..len as usize]);
-
-        let wnds: &mut Vec<WinApp> = mem::transmute(wnds_ptr);
-        
-        if !text.is_empty() {
-            wnds.push(WinApp{name: text, memory: 0.0, hwnd: window});
-        }
-
-        true.into()
-    }
-}
-*/

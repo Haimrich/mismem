@@ -1,38 +1,81 @@
 mod app;
+mod handler;
 mod ui;
 mod win;
 mod mem;
 
-use std::{error::Error, io};
+use std::{sync::Arc, error::Error, io, time::{Instant, Duration}};
 
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
-    execute,
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    execute,
 };
 
 use tui::{
-    backend::{Backend, CrosstermBackend}, Terminal
+    backend::CrosstermBackend, Terminal
 };
 
-use tui_input::backend::crossterm as input_backend;
-use tui_input::backend::crossterm::EventHandler;
+use app::App;
+use handler::Handler;
 
-use app::{AppState,EditState};
 
-fn main() -> Result<(), Box<dyn Error>> {
-    // setup terminal
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Event>(100);
+
+    let app = Arc::new(tokio::sync::Mutex::new(App::new()));
+    let app_ui = Arc::clone(&app);
+
+    tui_logger::init_logger(log::LevelFilter::Trace).unwrap();
+    tui_logger::set_default_level(log::LevelFilter::Trace);
+    log::info!(" 😊 Hello!");
+
+    tokio::spawn(async move {
+        let mut handler = Handler::new(app);
+
+        while let Some(event) = rx.recv().await {
+            handler.handle(event).await;
+        }
+    });
+
+    start_ui(&app_ui, &tx).await?;
+
+    Ok(())
+}
+
+pub async fn start_ui(app: &Arc<tokio::sync::Mutex<App>>, tx: &tokio::sync::mpsc::Sender<Event>) -> io::Result<()> {
+    
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // create app and run it
-    let app = app::App::new();
-    let res = run_app(&mut terminal, app);
+    let tick_rate = Duration::from_millis(60);
+    let mut last_tick = Instant::now();
 
-    // restore terminal
+    loop {        
+        let timeout = tick_rate.checked_sub(last_tick.elapsed()).unwrap_or_else(|| Duration::from_secs(0));
+
+        if crossterm::event::poll(timeout)? {
+            let event = event::read()?;
+            _ = tx.send(event).await;
+        }
+
+        if last_tick.elapsed() >= tick_rate {
+            // app.on_tick();
+            last_tick = Instant::now();
+        }
+
+        let mut app = app.lock().await;
+        terminal.draw(|rect| ui::draw(rect, &mut app))?;
+
+        if app.exiting {
+            break
+        }
+    }
+
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -41,84 +84,5 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     terminal.show_cursor()?;
 
-    if let Err(err) = res {
-        println!("{:?}", err)
-    }
-
     Ok(())
 }
-
-fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: app::App) -> io::Result<()> {
-    loop {
-        terminal.draw(|f| ui::draw(f, &mut app))?;
-
-        if let Event::Key(key) = event::read()? {
-            if key.code == KeyCode::Char('q') { return Ok(()); }
-            
-            match app.state {
-                AppState::SelectProcess => match key.code {
-                    KeyCode::Down => app.next(),
-                    KeyCode::Up => app.previous(),
-                    KeyCode::Char('u') => app.update(),
-                    KeyCode::Enter => app.select_process(),
-                    _ => {}
-                }
-                AppState::EditMemory => match app.edit_state {
-                
-                    EditState::Select => match key.code {
-                        KeyCode::Down => app.memory_next(),
-                        KeyCode::Up => app.memory_previous(),
-                        KeyCode::Char('i') => {
-                            app.edit_state = EditState::Input;
-                        },
-                        KeyCode::Char('s') => app.change_search_mode(),
-                        KeyCode::Char('t') => app.change_search_datatype(),
-                        KeyCode::Char('m') => app.change_search_type(),
-                        KeyCode::Left | KeyCode::Esc => {
-                            app.back()
-                        },
-                        KeyCode::Enter => {
-                            app.select_memory()
-                        },
-                        KeyCode::Char('u') => app.update_memory(),
-                        _ => {}
-                    },
-                    EditState::Input => if app.show_popup { 
-                        app.show_popup = false;
-                    } else {
-                        match key.code {
-                            KeyCode::Enter => {
-                                app.search();
-                            },
-                            KeyCode::Esc => {
-                                app.edit_state = EditState::Select;
-                            },
-                            _ => {
-                                app.search_input.handle_event(&Event::Key(key));
-                            }
-                        }
-                    },
-                    EditState::Edit => if app.show_popup { 
-                        app.show_popup = false;
-                    } else {
-                        match key.code {
-                            KeyCode::Enter => {
-                                app.mismem();
-                            },
-                            KeyCode::Esc => {
-                                app.edit_state = EditState::Select;
-                            },
-                            _ => {
-                                app.mismem_input.handle_event(&Event::Key(key));
-                            }
-                        }
-                    },
-                    _ => {}
-                }
-                _ => {}
-            }
-        }
-    }
-}
-
-

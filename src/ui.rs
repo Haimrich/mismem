@@ -9,6 +9,7 @@ use tui::style::{Color,Modifier,Style};
 use tui::text::{Span, Spans, Text};
 use tui::widgets::{Table,Row,Cell,Block,Borders,Paragraph,Clear,Gauge,List,ListItem};
 
+use tui_logger::{TuiLoggerWidget,TuiLoggerLevelOutput};
 
 pub fn draw<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     match app.state {
@@ -56,12 +57,11 @@ fn draw_select_process<B: Backend>(f: &mut Frame<B>, app: &mut App) {
 
     // Process List
     let selected_style = Style::default().add_modifier(Modifier::REVERSED);
-    let normal_style = Style::default().bg(Color::DarkGray);
     let header_cells = ["PID", "Process Name", "Memory Usage [kB]"]
         .iter()
-        .map(|h| Cell::from(*h).style(Style::default().fg(Color::Red)));
+        .map( |h| Cell::from(*h) );
     let header = Row::new(header_cells)
-        .style(normal_style)
+        .style(Style::default().bg(Color::DarkGray).fg(Color::Black))
         .height(1)
         .bottom_margin(1);
     let rows = app.processes.iter().map(|item| {
@@ -76,13 +76,14 @@ fn draw_select_process<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     });
     let t = Table::new(rows)
         .header(header)
+        .column_spacing(1)
         .block(Block::default().borders(Borders::ALL).title("Process List"))
         .highlight_style(selected_style)
         .highlight_symbol(">> ")
         .widths(&[
             Constraint::Length(8),
-            Constraint::Percentage(80),
-            Constraint::Percentage(20),
+            Constraint::Percentage(60),
+            Constraint::Percentage(40),
         ]);
     f.render_stateful_widget(t, rects[1], &mut app.table_state);
 
@@ -167,21 +168,26 @@ fn draw_edit_memory<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     // Memory List
     
     let selected_style = Style::default().add_modifier(Modifier::REVERSED);
-    let normal_style = Style::default().bg(Color::DarkGray);
     let header_cells = ["Address", "Value", "Old Value"]
         .iter()
-        .map(|h| Cell::from(*h).style(Style::default().fg(Color::Red)));
+        .map( |h| Cell::from(*h) );
     let header = Row::new(header_cells)
-        .style(normal_style)
+        .style(Style::default().bg(Color::DarkGray).fg(Color::Black))
         .height(1)
         .bottom_margin(1);
-    let rows = app.memory.iter().map(|item| {
+
+    // Eager loading in chunks bacause of too many rows, this only works in one direction, TODO extend to both directions one day (never)
+    const EAGER_CHUNK_SIZE : usize = 40;
+    let num_rows_to_load = (app.table_state.selected().unwrap_or(0) / EAGER_CHUNK_SIZE + 2) * EAGER_CHUNK_SIZE;
+    
+    let rows = app.memory.iter().take(num_rows_to_load).map(|item| {
         let cells = item.iter().map(|c| Cell::from(c.clone()));
         Row::new(cells)
     });
    
     let t = Table::new(rows)
         .header(header)
+        .column_spacing(1)
         .block(Block::default().borders(Borders::ALL)
             .title(" 💾 Results ")
             .style(if matches!(app.edit_state, EditState::Select) && !app.show_popup {
@@ -192,7 +198,7 @@ fn draw_edit_memory<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .highlight_style(selected_style)
         .highlight_symbol(">> ")
         .widths(&[
-            Constraint::Percentage(29),
+            Constraint::Percentage(40),
             Constraint::Percentage(30),
             Constraint::Percentage(30),
         ]);
@@ -228,17 +234,43 @@ fn draw_edit_memory<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         )
     }
 
+    // Progress Gauge
     let label = format!("{:.1}%", app.search_progress * 100.0);
     let gauge = Gauge::default()
-        .block(Block::default().title(" ⏱  Search Progress ").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::DarkGray).bg(Color::Reset))
+        .block(Block::default().title(" 🚀 Search Progress ")
+        .borders(Borders::ALL)
+        .style(if matches!(app.edit_state, EditState::Busy) && !app.show_popup {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default()
+        }))
+        .gauge_style(if matches!(app.edit_state, EditState::Busy) && !app.show_popup {
+            Style::default().fg(Color::Yellow).bg(Color::Reset)
+        } else {
+            Style::default().fg(Color::DarkGray).bg(Color::Reset)
+        })
         .ratio(app.search_progress)
         .label(label);
     f.render_widget(gauge, rects[2]);
 
-    let block = Block::default().title(" 📜 Logs ").borders(Borders::ALL);
-    f.render_widget(block, rects[3]);
-
+    // Logs
+    let tui_w: TuiLoggerWidget = TuiLoggerWidget::default()
+        .block(
+            Block::default().title(" 📜 Logs ").borders(Borders::ALL)
+        )
+        .style_error(Style::default().fg(Color::Red))
+        .style_debug(Style::default().fg(Color::Green))
+        .style_warn(Style::default().fg(Color::Yellow))
+        .style_trace(Style::default().fg(Color::Cyan))
+        .style_info(Style::default().fg(Color::White))
+        .output_separator(':')
+        .output_timestamp(Some("%H:%M:%S".to_string()))
+        .output_level(Some(TuiLoggerLevelOutput::Abbreviated))
+        .output_target(false)
+        .output_file(false)
+        .output_line(false)
+        .style(Style::default().fg(Color::White).bg(Color::Reset));
+    f.render_widget(tui_w, rects[3]);
 
     // Search Settings
     let rects = Layout::default()
@@ -260,7 +292,7 @@ fn draw_edit_memory<B: Backend>(f: &mut Frame<B>, app: &mut App) {
                 .title(vec![Span::styled(key, Style::default().add_modifier(Modifier::BOLD)),Span::raw(name)])
                 .title_alignment(Alignment::Center)
             )
-            .highlight_style(Style::default().bg(Color::DarkGray))
+            .highlight_style(Style::default().bg(Color::DarkGray).fg(Color::Black))
             .highlight_symbol("> ")
     }
 
